@@ -60,15 +60,15 @@ install(FILES include/led.h
     DESTINATION include
 )
 
-option(BUILD_TESTS "Build test programs" OFF)
+option(BUILD_TESTS "Build example programs" OFF)
 
 if(BUILD_TESTS)
-    add_executable(test_led_generic test/test_led_generic.c)
+    add_executable(test_led_generic example/test_led_generic.c)
     target_link_libraries(test_led_generic led)
     set_target_properties(test_led_generic PROPERTIES BUILD_RPATH "$ORIGIN/../lib")
     install(TARGETS test_led_generic RUNTIME DESTINATION bin)
 
-    add_executable(test_led_ws2812 test/test_led_ws2812.c)
+    add_executable(test_led_ws2812 example/test_led_ws2812.c)
     target_link_libraries(test_led_ws2812 led)
     set_target_properties(test_led_ws2812 PROPERTIES BUILD_RPATH "$ORIGIN/../lib")
     install(TARGETS test_led_ws2812 RUNTIME DESTINATION bin)
