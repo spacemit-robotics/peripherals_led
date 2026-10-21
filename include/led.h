@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,10 +35,30 @@ struct led_blink_param {
 
 struct led_dev; /* opaque handle */
 
+#define LED_MAX_CHANNELS 8U
+
+struct led_pwm_channel {
+    const char *device;  /* PWM platform device name, independent of pwmchip numbering. */
+    uint32_t channel;
+    uint64_t period_ns;
+};
+
+struct led_pwm_config {
+    const char *sysfs_root;  /* NULL selects /sys/class/pwm. */
+    struct led_pwm_channel channels[LED_MAX_CHANNELS];
+    size_t channel_count;
+};
 
 /* allocate LED device */
 struct led_dev *led_alloc_generic(const char *name, void *args);
 struct led_dev *led_alloc_spi(const char *name, void *args);
+/* PWM allocation performs no sysfs I/O; led_init() acquires the channels, initially off. */
+struct led_dev *led_alloc_pwm(const char *driver, const char *instance,
+    const struct led_pwm_config *config);
+int led_init(struct led_dev *dev);
+size_t led_channel_count(const struct led_dev *dev);
+/* Set per-channel high time in nanoseconds; zero duty disables the channel. */
+int led_set_duty_ns(struct led_dev *dev, const uint64_t *duty_ns, size_t count);
 
 
 /* basic control */

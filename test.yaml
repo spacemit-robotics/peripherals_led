@@ -5,7 +5,7 @@ module: components/peripherals/led
 
 tests:
   - name: led-api-functional
-    description: Verifies LED state, toggle, brightness, color, blink, and breath behavior using a mock driver.
+    description: Verifies LED state, brightness, color and effects with a mock driver, and hardware PWM with fake sysfs.
     category: functional
     scopes: [pr, scheduled]
     timeout_s: 120
@@ -14,7 +14,7 @@ tests:
       bash components/peripherals/led/tests/test_led_api_contract.sh functional
 
   - name: led-api-error-paths
-    description: Verifies null inputs, malformed driver names, missing drivers, and bus type mismatch handling.
+    description: Verifies invalid inputs, driver type mismatches, PWM configuration rejection, export failure rollback and retry.
     category: functional
     scopes: [pr, scheduled]
     timeout_s: 120

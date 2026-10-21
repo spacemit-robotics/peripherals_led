@@ -1,7 +1,12 @@
+#define _DEFAULT_SOURCE
 /*
  * Copyright (C) 2026 SpacemiT (Hangzhou) Technology Co. Ltd.
  * SPDX-License-Identifier: Apache-2.0
  */
+#include <assert.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -118,6 +123,8 @@ static struct led_dev *mock_factory(void *args)
 
 REGISTER_LED_DRIVER("MOCK", LED_DRV_GENERIC, mock_factory);
 
+static void test_pwm_error_paths(void);
+
 static void test_error_paths(void)
 {
     struct led_color color = LED_COLOR_RED;
@@ -137,12 +144,221 @@ static void test_error_paths(void)
     led_breath(NULL, 100);
     led_tick(NULL, 10);
     led_free(NULL);
+    CHECK_INT_EQ(led_init(NULL), -EINVAL);
+    CHECK_INT_EQ(led_channel_count(NULL), 0);
+    CHECK_INT_EQ(led_set_duty_ns(NULL, NULL, 0), -EINVAL);
+    CHECK_TRUE(led_alloc_pwm(NULL, "test", NULL) == NULL);
+    CHECK_TRUE(led_alloc_pwm("", "test", NULL) == NULL);
 
     CHECK_TRUE(led_alloc_generic(NULL, NULL) == NULL);
     CHECK_TRUE(led_alloc_generic("MOCK:", NULL) == NULL);
     CHECK_TRUE(led_alloc_generic(":led0", NULL) == NULL);
     CHECK_TRUE(led_alloc_generic("MISSING:led0", NULL) == NULL);
     CHECK_TRUE(led_alloc_spi("MOCK:led0", NULL) == NULL);
+    test_pwm_error_paths();
+}
+
+static void attribute(const char *root, const char *name, const char *value)
+{
+    char path[512];
+    FILE *file;
+
+    snprintf(path, sizeof(path), "%s/%s", root, name);
+    file = fopen(path, "w");
+    assert(file != NULL);
+    assert(fputs(value, file) >= 0);
+    assert(fclose(file) == 0);
+}
+
+static unsigned long read_attribute(const char *root, const char *name)
+{
+    char path[512];
+    unsigned long value;
+    FILE *file;
+
+    snprintf(path, sizeof(path), "%s/%s", root, name);
+    file = fopen(path, "r");
+    assert(file != NULL);
+    assert(fscanf(file, "%lu", &value) == 1);
+    fclose(file);
+    return value;
+}
+
+static void test_pwm_error_paths(void)
+{
+    char root[] = "/tmp/led-error-XXXXXX";
+    char path[512];
+    struct led_pwm_config config = {
+        .sysfs_root = root,
+        .channels = {{"test.pwm", 0, 5000000}, {"test.pwm", 1, 5000000}},
+        .channel_count = 2,
+    };
+    struct led_pwm_config invalid = config;
+    const char *attributes[] = {"enable", "duty_cycle", "period", "polarity"};
+    uint64_t duty[] = {100000, 200000};
+    struct led_dev *dev;
+    size_t i;
+    size_t j;
+
+    invalid.channels[1] = invalid.channels[0];
+    CHECK_TRUE(led_alloc_pwm("drv_pwm_sysfs", "test", &invalid) == NULL);
+    invalid = config;
+    invalid.channels[0].period_ns = 0;
+    CHECK_TRUE(led_alloc_pwm("drv_pwm_sysfs", "test", &invalid) == NULL);
+    invalid = config;
+    invalid.channels[0].device = "bad/device";
+    CHECK_TRUE(led_alloc_pwm("drv_pwm_sysfs", "test", &invalid) == NULL);
+    invalid = config;
+    invalid.channel_count = 0;
+    CHECK_TRUE(led_alloc_pwm("drv_pwm_sysfs", "test", &invalid) == NULL);
+    invalid.channel_count = LED_MAX_CHANNELS + 1;
+    CHECK_TRUE(led_alloc_pwm("drv_pwm_sysfs", "test", &invalid) == NULL);
+
+    assert(mkdtemp(root) != NULL);
+    snprintf(path, sizeof(path), "%s/test.pwm", root);
+    assert(mkdir(path, 0700) == 0);
+    snprintf(path, sizeof(path), "%s/pwmchip9", root);
+    assert(mkdir(path, 0700) == 0);
+    snprintf(path, sizeof(path), "%s/pwmchip9/device", root);
+    assert(symlink("../test.pwm", path) == 0);
+    snprintf(path, sizeof(path), "%s/pwmchip9/pwm0", root);
+    assert(mkdir(path, 0700) == 0);
+    for (j = 0; j < 4; ++j) {
+        char name[128];
+
+        snprintf(name, sizeof(name), "pwmchip9/pwm0/%s", attributes[j]);
+        attribute(root, name, "0\n");
+    }
+    attribute(root, "pwmchip9/pwm0/enable", "1\n");
+    attribute(root, "pwmchip9/pwm0/duty_cycle", "123\n");
+    attribute(root, "pwmchip9/unexport", "99\n");
+    dev = led_alloc_pwm("drv_pwm_sysfs", "test", &config);
+    assert(dev != NULL);
+    CHECK_INT_EQ(read_attribute(root, "pwmchip9/pwm0/enable"), 1);
+    CHECK_INT_EQ(read_attribute(root, "pwmchip9/pwm0/duty_cycle"), 123);
+
+    /* Channel 0 already exists. Channel 1 cannot be exported: roll back
+     * channel 0, but do not unexport a channel that this instance does not own. */
+    CHECK_INT_EQ(led_init(dev), -ENOENT);
+    CHECK_INT_EQ(read_attribute(root, "pwmchip9/pwm0/enable"), 0);
+    CHECK_INT_EQ(read_attribute(root, "pwmchip9/pwm0/duty_cycle"), 0);
+    CHECK_INT_EQ(read_attribute(root, "pwmchip9/unexport"), 99);
+
+    /* A fake export accepts the write without creating pwm1. Failure to
+     * configure the newly acquired channel must unexport it. */
+    attribute(root, "pwmchip9/export", "99\n");
+    CHECK_INT_EQ(led_init(dev), -ENOENT);
+    CHECK_INT_EQ(read_attribute(root, "pwmchip9/export"), 1);
+    CHECK_INT_EQ(read_attribute(root, "pwmchip9/unexport"), 1);
+
+    /* Repair the attributes and retry the same instance after both failures. */
+    attribute(root, "pwmchip9/unexport", "99\n");
+    snprintf(path, sizeof(path), "%s/pwmchip9/pwm1", root);
+    assert(mkdir(path, 0700) == 0);
+    for (j = 0; j < 4; ++j) {
+        char name[128];
+
+        snprintf(name, sizeof(name), "pwmchip9/pwm1/%s", attributes[j]);
+        attribute(root, name, "0\n");
+    }
+    CHECK_INT_EQ(led_init(dev), 0);
+    CHECK_INT_EQ(led_set_duty_ns(dev, duty, 2), 0);
+    CHECK_INT_EQ(read_attribute(root, "pwmchip9/pwm0/duty_cycle"), duty[0]);
+    CHECK_INT_EQ(read_attribute(root, "pwmchip9/pwm1/duty_cycle"), duty[1]);
+    led_free(dev);
+    CHECK_INT_EQ(read_attribute(root, "pwmchip9/pwm0/enable"), 0);
+    CHECK_INT_EQ(read_attribute(root, "pwmchip9/pwm1/enable"), 0);
+    CHECK_INT_EQ(read_attribute(root, "pwmchip9/unexport"), 99);
+
+    for (i = 0; i < 2; ++i) {
+        for (j = 0; j < 4; ++j) {
+            snprintf(path, sizeof(path), "%s/pwmchip9/pwm%zu/%s", root, i, attributes[j]);
+            assert(unlink(path) == 0);
+        }
+        snprintf(path, sizeof(path), "%s/pwmchip9/pwm%zu", root, i);
+        assert(rmdir(path) == 0);
+    }
+    const char *files[] = {"export", "unexport", "device"};
+    for (i = 0; i < 3; ++i) {
+        snprintf(path, sizeof(path), "%s/pwmchip9/%s", root, files[i]);
+        assert(unlink(path) == 0);
+    }
+    snprintf(path, sizeof(path), "%s/pwmchip9", root);
+    assert(rmdir(path) == 0);
+    snprintf(path, sizeof(path), "%s/test.pwm", root);
+    assert(rmdir(path) == 0);
+    assert(rmdir(root) == 0);
+}
+
+static void test_pwm(void)
+{
+    char root[] = "/tmp/led-test-XXXXXX";
+    char path[512];
+    struct led_pwm_config config = {
+        .sysfs_root = root,
+        .channels = {{"test.pwm", 0, 5000000}, {"test.pwm", 1, 5000000}},
+        .channel_count = 2,
+    };
+    const char *directories[] = {"test.pwm", "pwmchip9", "pwmchip9/pwm0", "pwmchip9/pwm1"};
+    const char *attributes[] = {"enable", "duty_cycle", "period", "polarity"};
+    uint64_t duty[] = {200000, 5000000};
+    struct led_dev *dev;
+    size_t i;
+    size_t j;
+
+    assert(mkdtemp(root) != NULL);
+    for (i = 0; i < 4; ++i) {
+        snprintf(path, sizeof(path), "%s/%s", root, directories[i]);
+        assert(mkdir(path, 0700) == 0);
+    }
+    snprintf(path, sizeof(path), "%s/pwmchip9/device", root);
+    assert(symlink("../test.pwm", path) == 0);
+    for (i = 0; i < 2; ++i) {
+        for (j = 0; j < 4; ++j) {
+            char name[128];
+
+            snprintf(name, sizeof(name), "pwmchip9/pwm%zu/%s", i, attributes[j]);
+            attribute(root, name, "0\n");
+        }
+    }
+    assert(led_alloc_pwm("missing", "test", &config) == NULL);
+    dev = led_alloc_pwm("drv_pwm_sysfs", "test", &config);
+    assert(dev != NULL && led_channel_count(dev) == 2);
+    assert(led_set_duty_ns(dev, duty, 2) < 0);
+    assert(led_init(dev) == 0 && led_init(dev) == 0);
+    assert(read_attribute(root, "pwmchip9/pwm0/enable") == 0);
+    assert(read_attribute(root, "pwmchip9/pwm0/period") == 5000000);
+    assert(led_set_duty_ns(dev, duty, 2) == 0);
+    assert(read_attribute(root, "pwmchip9/pwm0/duty_cycle") == 200000);
+    assert(read_attribute(root, "pwmchip9/pwm1/enable") == 1);
+    duty[1] = 5000001;
+    assert(led_set_duty_ns(dev, duty, 2) < 0);
+    duty[1] = 0;
+    assert(led_set_duty_ns(dev, duty, 2) == 0);
+    assert(read_attribute(root, "pwmchip9/pwm1/enable") == 0);
+    assert(read_attribute(root, "pwmchip9/pwm0/enable") == 1);
+    led_set_state(dev, false);
+    assert(read_attribute(root, "pwmchip9/pwm0/enable") == 0);
+    led_set_brightness(dev, 255);
+    assert(read_attribute(root, "pwmchip9/pwm0/duty_cycle") == 5000000);
+    assert(read_attribute(root, "pwmchip9/pwm1/enable") == 1);
+    led_free(dev);
+    assert(read_attribute(root, "pwmchip9/pwm0/enable") == 0);
+    for (i = 0; i < 2; ++i) {
+        for (j = 0; j < 4; ++j) {
+            snprintf(path, sizeof(path), "%s/pwmchip9/pwm%zu/%s", root, i, attributes[j]);
+            assert(unlink(path) == 0);
+        }
+    }
+    snprintf(path, sizeof(path), "%s/pwmchip9/device", root);
+    assert(unlink(path) == 0);
+    for (i = 4; i > 0; --i) {
+        snprintf(path, sizeof(path), "%s/%s", root, directories[i - 1]);
+        assert(rmdir(path) == 0);
+    }
+    assert(rmdir(root) == 0);
+    config.channel_count = 0;
+    assert(led_alloc_pwm("drv_pwm_sysfs", "test", &config) == NULL);
 }
 
 static void test_functional(void)
@@ -205,6 +421,7 @@ static void test_functional(void)
 
     led_free(dev);
     CHECK_INT_EQ(g_free_count, 1);
+    test_pwm();
 }
 
 static int finish_test(const char *name)

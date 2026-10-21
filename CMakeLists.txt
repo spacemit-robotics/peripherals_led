@@ -72,4 +72,13 @@ if(BUILD_TESTS)
     target_link_libraries(test_led_ws2812 led)
     set_target_properties(test_led_ws2812 PROPERTIES BUILD_RPATH "$ORIGIN/../lib")
     install(TARGETS test_led_ws2812 RUNTIME DESTINATION bin)
+
+    if("drv_pwm_sysfs" IN_LIST _led_enabled_drivers)
+        add_executable(test_led_pwm_sysfs example/test_led_pwm_sysfs.c)
+        target_link_libraries(test_led_pwm_sysfs led)
+        set_target_properties(test_led_pwm_sysfs PROPERTIES
+            BUILD_RPATH "$ORIGIN/../lib"
+            INSTALL_RPATH "$ORIGIN/../lib")
+        install(TARGETS test_led_pwm_sysfs RUNTIME DESTINATION bin)
+    endif()
 endif()
