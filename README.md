@@ -4,6 +4,7 @@
 
 ## 功能特性
 - 支持：sysfs 亮灭控制（`/sys/class/leds/<name>/brightness`），SPI WS2812/SK6812 灯带控制（spidev）。
+- 支持：多通道硬件 PWM（`/sys/class/pwm`），按 platform device 名称定位控制器并独立设置各通道脉宽。
 - 支持：基础 API（开关/亮度/颜色）与效果（闪烁/呼吸），效果需周期调用 `led_tick()`。
 - 不支持：WS2812 单颗粒独立颜色控制、硬件读取回传、复杂动画脚本。
 
@@ -76,6 +77,10 @@ make
 ```
 
 ## 详细使用
+硬件 PWM 需启用驱动 `drv_pwm_sysfs`。使用 `led_alloc_pwm()` 配置通道，
+`led_init()` 以关闭状态申请硬件，`led_set_duty_ns()` 非阻塞更新各路高电平时间，
+零值关闭对应通道；`led_free()` 关闭通道并释放由实例导出的 PWM。
+
 详细 API 与配置说明请参考后续官方文档。
 
 ## 常见问题

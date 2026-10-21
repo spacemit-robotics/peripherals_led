@@ -18,6 +18,7 @@
 enum led_driver_type {
     LED_DRV_GENERIC = 0,
     LED_DRV_SPI,
+    LED_DRV_PWM,
 };
 
 /* 2. Ops table (driver implementation) */
@@ -26,6 +27,8 @@ struct led_ops {
     int (*set_brightness)(struct led_dev *dev, uint8_t brightness);
     int (*set_color)(struct led_dev *dev, const struct led_color *color);
     void (*free)(struct led_dev *dev);
+    int (*init)(struct led_dev *dev);
+    int (*set_duty_ns)(struct led_dev *dev, const uint64_t *duty_ns, size_t count);
 };
 
 /* 3. Device object (private implementation) */
@@ -52,6 +55,7 @@ struct led_dev {
 
     uint16_t breath_period_ms;
     uint16_t breath_elapsed_ms;
+    size_t channel_count;
 };
 
 /* 4. Generic factory function type */
@@ -83,6 +87,11 @@ void led_driver_register(struct led_driver_info *info);
 struct led_args {
     const char *instance;
     void *args;
+};
+
+struct led_args_pwm {
+    const char *instance;
+    const struct led_pwm_config *config;
 };
 
 struct led_dev *led_dev_alloc(const char *instance, size_t priv_size);
