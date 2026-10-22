@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
 
 static struct led_driver_info *g_driver_list = NULL;
 
@@ -199,6 +200,50 @@ struct led_dev *led_alloc_spi(const char *name, void *args)
     wrap.instance = instance;
     wrap.args = args;
     return drv->factory(&wrap);
+}
+
+struct led_dev *led_alloc_pwm(const char *driver, const char *instance,
+    const struct led_pwm_config *config)
+{
+    struct led_driver_info *info;
+    struct led_args_pwm args;
+
+    if (!driver || !*driver || !config)
+        return NULL;
+    info = find_driver(driver, LED_DRV_PWM);
+    if (!info || !info->factory)
+        return NULL;
+    args.instance = instance ? instance : driver;
+    args.config = config;
+    return info->factory(&args);
+}
+
+int led_init(struct led_dev *dev)
+{
+    if (!dev || !dev->ops)
+        return -EINVAL;
+    if (!dev->ops->init)
+        return -ENOTSUP;
+    return dev->ops->init(dev);
+}
+
+size_t led_channel_count(const struct led_dev *dev)
+{
+    return dev ? dev->channel_count : 0U;
+}
+
+int led_set_duty_ns(struct led_dev *dev, const uint64_t *duty_ns, size_t count)
+{
+    int result;
+
+    if (!dev || !duty_ns || count == 0 || count != dev->channel_count || !dev->ops)
+        return -EINVAL;
+    if (!dev->ops->set_duty_ns)
+        return -ENOTSUP;
+    result = dev->ops->set_duty_ns(dev, duty_ns, count);
+    if (result == 0)
+        dev->effect = LED_EFFECT_NONE;
+    return result;
 }
 
 void led_set_state(struct led_dev *dev, bool on)

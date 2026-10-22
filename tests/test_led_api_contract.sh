@@ -28,6 +28,7 @@ mkdir -p "$log_dir" "$build_dir"
         -I"$module_root/src" \
         -I"$module_root/src/drivers" \
         "$module_root/src/led_core.c" \
+        "$module_root/src/drivers/drv_pwm_sysfs.c" \
         "$module_root/tests/test_led_api_contract.c" \
         -o "$build_dir/test_led_api_contract"
 
